@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: beatshop
+    runtime: node
+    plan: starter            # нужен платный тариф, чтобы подключить диск с данными
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/config
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 2
+    envVars:
+      - { key: NODE_ENV, value: production }
+      - { key: DATA_DIR, value: /data }
+      - { key: JWT_SECRET, generateValue: true }
+      - { key: ADMIN_KEY, generateValue: true }
+      - { key: TELEGRAM_BOT_TOKEN, sync: false }
+      - { key: TELEGRAM_BOT_USERNAME, sync: false }
+      - { key: ADMIN_CHAT_ID, sync: false }
+      - { key: GOOGLE_CLIENT_ID, sync: false }
+      - { key: BASE_URL, sync: false }
