@@ -131,10 +131,12 @@ input,select{background:var(--panel);border:1px solid var(--line);border-radius:
   <div id="orderList" style="margin:10px 0"></div>
   <label class="meta">Куда прислать полный бит: почта или Telegram
     <input id="contact" placeholder="you@mail.com или @username" autocomplete="email"></label>
-  <div class="note" id="payHint">Сначала укажи контакт. После этого появятся реквизиты для оплаты.</div>
-  <div class="stack" id="payBox" style="margin-top:12px"></div>
-  <a class="btn" id="sent" target="_blank" rel="noopener" style="display:none;text-align:center;text-decoration:none;margin-top:12px">Я оплатил(а), отправить заказ продавцу</a>
-  <div class="note">Полные версии битов придут на твой контакт после проверки оплаты.</div>
+  <div class="note" id="payHint">Сначала укажи контакт.</div>
+  <button class="btn" id="go" style="display:none;margin-top:12px;width:100%">Показать реквизиты для оплаты</button>
+  <div class="stack" id="payBox" style="margin-top:12px;display:none"></div>
+  <div class="note" id="payStatus"></div>
+  <a class="btn" id="sent" href="#" style="display:none;text-align:center;text-decoration:none;margin-top:12px">Я оплатил(а)</a>
+  <div class="note">Полные версии битов придут на твой контакт после подтверждения оплаты.</div>
   <button class="btn ghost sm" style="margin-top:14px" data-close="orderOv">Закрыть</button>
 </div></div>
 
@@ -155,8 +157,7 @@ const CONFIG = {
   UAH_PER_USD: 44.68,     // курс НБУ на 01.10.2026 для пересчёта в доллары, обновляй при необходимости
   MONO_CARD: "4441 1110 6399 7682",
   DONATION_URL: "https://www.donationalerts.com/r/beats228",
-  PAYPAL_EMAIL: "perevertajlovigor@gmail.com",
-  ORDER_EMAIL: "perevertajlovigor@gmail.com"   // сюда приходит заказ с контактом покупателя
+  PAYPAL_EMAIL: "perevertajlovigor@gmail.com"
 };
 
 const GENRES = ["SoundCloud","Trap","Drill","Lo-fi","Hip-hop","R&B","Phonk"];
@@ -245,25 +246,41 @@ $("#checkout").onclick=()=>{
   openOrder();
 };
 function validContact(v){return /^(@?[A-Za-z0-9_]{5,32}|[^\s@]+@[^\s@]+\.[^\s@]+)$/.test(v)}
-function openOrder(rows=cart.map(id=>beats.find(b=>b.id===id)).filter(Boolean),plan=null){
+let orderTimer=null;
+async function openOrder(rows=cart.map(id=>beats.find(b=>b.id===id)).filter(Boolean),plan=null){
+  clearInterval(orderTimer);
   const sum=rows.reduce((s,b)=>s+cv(b),0),amt=fm(sum);
   $("#orderList").innerHTML=rows.map(b=>`<div class="it"><span>${esc(b.title)}</span><b>${money(b)}</b></div>`).join("")+`<div class="it"><span>Итого</span><b class="price">${amt}</b></div>`;
-  let pay;
-  if(cur==="UAH")pay=`<div class="meta">Переведи ${amt} на карту Monobank</div><div class="cardnum">${CONFIG.MONO_CARD}</div><button class="btn ghost" data-copy="${CONFIG.MONO_CARD.replace(/\s/g,"")}">Скопировать номер карты</button>`;
-  else if(cur==="RUB")pay=`<a class="btn" href="${CONFIG.DONATION_URL}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Оплатить ${amt} в DonationAlerts</a><div class="meta">Укажи сумму ${amt} и в сообщении свой контакт.</div>`;
-  else pay=`<div class="meta">Отправь ${amt} через PayPal на адрес</div><div class="cardnum">${CONFIG.PAYPAL_EMAIL}</div><button class="btn ghost" data-copy="${CONFIG.PAYPAL_EMAIL}">Скопировать адрес</button>`;
-  $("#payBox").innerHTML=pay;
-  document.querySelectorAll("[data-copy]").forEach(b=>b.onclick=()=>{try{navigator.clipboard.writeText(b.dataset.copy).then(()=>toast("Скопировано"),()=>toast("Скопируй вручную"))}catch(e){toast("Скопируй вручную")}});
-  const upd=()=>{const v=$("#contact").value.trim(),ok=validContact(v);
-    $("#payBox").style.display=ok?"grid":"none";$("#sent").style.display=ok?"block":"none";$("#payHint").style.display=ok?"none":"block";
-    if(ok){const body="Заказ BEATSHOP\nПокупатель: "+user.name+"\nКонтакт для получения: "+v+"\nВалюта: "+cur+"\n"+rows.map(b=>"• "+b.title+" — "+money(b)).join("\n")+"\nИтого: "+amt;
-      $("#sent").href="mailto:"+CONFIG.ORDER_EMAIL+"?subject="+encodeURIComponent("Заказ битов на "+amt)+"&body="+encodeURIComponent(body)}};
-  $("#contact").oninput=upd;upd();
-  $("#sent").onclick=async e=>{e.preventDefault();
-    try{await api("/api/order",{method:"POST",headers:JSONH,body:JSON.stringify({contact:$("#contact").value.trim(),items:rows.map(b=>b.title),sum:amt,cur,plan})});
-      if(!plan){cart=[];store.set("cart",cart);renderCart()}
-      $("#orderOv").classList.remove("open");toast(plan?"Заявка отправлена. Подписка включится после проверки оплаты":"Заказ отправлен")}
-    catch(err){toast(err.message)}};
+  const box=$("#payBox"),go=$("#go"),sent=$("#sent"),st=$("#payStatus"),ci=$("#contact");
+  box.style.display="none";box.innerHTML="";sent.style.display="none";st.textContent="";ci.disabled=false;go.disabled=false;
+  const upd=()=>{const ok=validContact(ci.value.trim());go.style.display=ok?"block":"none";$("#payHint").style.display=ok?"none":"block"};
+  ci.oninput=upd;upd();
+  go.onclick=async()=>{
+    go.disabled=true;
+    try{
+      const o=await api("/api/order",{method:"POST",headers:JSONH,body:JSON.stringify({contact:ci.value.trim(),ids:plan?[]:rows.map(b=>b.id),plan,cur})});
+      go.style.display="none";ci.disabled=true;
+      const a=fm(o.amount);let pay;
+      if(cur==="UAH")pay=`<div class="meta">Переведи ровно ${a} на карту Monobank. В комментарии к переводу укажи код заказа.</div><div class="cardnum">${CONFIG.MONO_CARD}</div><button class="btn ghost" data-copy="${CONFIG.MONO_CARD.replace(/\s/g,"")}">Скопировать номер карты</button>`;
+      else if(cur==="RUB")pay=`<div class="meta">Оплати ${a} через DonationAlerts. В сообщении укажи код заказа.</div><a class="btn" href="${CONFIG.DONATION_URL}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Открыть DonationAlerts</a>`;
+      else pay=`<div class="meta">Отправь ${a} через PayPal на адрес. В примечании укажи код заказа.</div><div class="cardnum">${CONFIG.PAYPAL_EMAIL}</div><button class="btn ghost" data-copy="${CONFIG.PAYPAL_EMAIL}">Скопировать адрес</button>`;
+      box.innerHTML=pay+`<div class="meta">Код заказа</div><div class="cardnum">${o.code}</div><button class="btn ghost" data-copy="${o.code}">Скопировать код</button>`;
+      box.style.display="grid";
+      box.querySelectorAll("[data-copy]").forEach(b=>b.onclick=()=>{try{navigator.clipboard.writeText(b.dataset.copy).then(()=>toast("Скопировано"),()=>toast("Скопируй вручную"))}catch(e){toast("Скопируй вручную")}});
+      const auto=cur==="UAH"&&o.autoMono;
+      st.textContent=auto?"Ждём перевод. Оплата определится автоматически, обычно за минуту.":"После оплаты нажми кнопку ниже, мы проверим платёж и подтвердим заказ.";
+      if(!auto){sent.style.display="block";sent.onclick=async e=>{e.preventDefault();try{await api("/api/order/"+o.id+"/claim",{method:"POST"});sent.style.display="none";st.textContent="Заявка отправлена. Ждём подтверждения оплаты."}catch(err){toast(err.message)}}}
+      let n=0;
+      orderTimer=setInterval(async()=>{
+        if(++n>450)return clearInterval(orderTimer);
+        try{const r=await api("/api/order/"+o.id);if(r.status==="paid"||r.status==="done"){
+          clearInterval(orderTimer);$("#orderOv").classList.remove("open");
+          if(plan){try{user=(await api("/api/me")).user;renderAuth()}catch(e){}toast("Подписка активна. Можно добавлять биты")}
+          else{cart=[];store.set("cart",cart);renderCart();toast("Оплата получена. Бит придёт на твой контакт")}
+        }}catch(e){}
+      },4000);
+    }catch(err){toast(err.message);go.disabled=false}
+  };
   $("#drawer").classList.remove("open");$("#orderOv").classList.add("open");
 }
 
@@ -280,7 +297,7 @@ function login(u){user=u;$("#authOv").classList.remove("open");renderAuth();toas
 function openAuth(msg){$("#authOv").classList.add("open");$("#authNote").textContent=msg||""}
 function loadScript(src){return new Promise((ok,no)=>{const s=document.createElement("script");s.src=src;s.async=true;s.onload=ok;s.onerror=no;document.body.appendChild(s)})}
 async function initAuth(){
-  try{SRV=await api("/api/config");user=(await api("/api/me")).user}catch(e){}
+  try{SRV=await api("/api/config");if(SRV.uahPerUsd){CONFIG.UAH_PER_USD=SRV.uahPerUsd;renderGrid();renderCart()}user=(await api("/api/me")).user}catch(e){}
   renderAuth();
   if(SRV.googleClientId){
     loadScript("https://accounts.google.com/gsi/client").then(()=>{

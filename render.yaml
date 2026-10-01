@@ -20,3 +20,7 @@ services:
       - { key: ADMIN_CHAT_ID, sync: false }
       - { key: GOOGLE_CLIENT_ID, sync: false }
       - { key: BASE_URL, sync: false }
+      - { key: MAIL_TO, value: beatshop228@gmail.com }
+      - { key: RESEND_API_KEY, sync: false }
+      - { key: MONO_TOKEN, sync: false }
+      - { key: MONO_SECRET, generateValue: true }

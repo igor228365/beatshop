@@ -10,7 +10,8 @@ import fs from 'fs';
 import path from 'path';
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_USERNAME, GOOGLE_CLIENT_ID, JWT_SECRET, ADMIN_KEY,
-  ADMIN_CHAT_ID, BASE_URL = '', DATA_DIR = './data', PORT = 3000 } = process.env;
+  ADMIN_CHAT_ID, BASE_URL = '', DATA_DIR = './data', PORT = 3000, RESEND_API_KEY, MONO_TOKEN, MONO_SECRET,
+  MAIL_TO = 'beatshop228@gmail.com', MAIL_FROM = 'BEATSHOP <onboarding@resend.dev>' } = process.env;
 if (!JWT_SECRET || !ADMIN_KEY) throw new Error('Задай JWT_SECRET и ADMIN_KEY');
 
 // ---------- хранилище (JSON-файл + папки на диске) ----------
@@ -19,6 +20,7 @@ const dbFile = path.join(DATA_DIR, 'db.json');
 const db = fs.existsSync(dbFile) ? JSON.parse(fs.readFileSync(dbFile, 'utf8')) : { users: {}, beats: [], orders: [] };
 const save = () => fs.writeFileSync(dbFile, JSON.stringify(db));
 
+const CATALOG = JSON.parse(fs.readFileSync(new URL('./catalog.json', import.meta.url), 'utf8'));
 const PLANS = { pro: { name: 'Pro', limit: 10 }, promax: { name: 'Pro Max', limit: Infinity } };
 const DAY = 864e5;
 const active = u => !!(u && u.plan && u.planUntil > Date.now());
@@ -44,7 +46,7 @@ function login(res, id, name, provider, email) {
   res.json({ user: pubUser(u) });
 }
 
-app.get('/api/config', (_q, r) => r.json({ googleClientId: GOOGLE_CLIENT_ID || '', telegramBot: TELEGRAM_BOT_USERNAME || '' }));
+app.get('/api/config', (_q, r) => r.json({ googleClientId: GOOGLE_CLIENT_ID || '', telegramBot: TELEGRAM_BOT_USERNAME || '', uahPerUsd: RATE }));
 app.get('/api/me', (q, r) => r.json({ user: q.user ? pubUser(q.user) : null }));
 app.post('/api/logout', (_q, r) => { r.clearCookie('s'); r.json({ ok: true }); });
 
@@ -130,17 +132,102 @@ async function notify(text) {
       body: JSON.stringify({ chat_id: ADMIN_CHAT_ID, text }) });
   } catch { /* уведомление не критично */ }
 }
+const RATE = Number(process.env.UAH_PER_USD) || 44.68;
+const PLAN_UAH = { pro: 500, promax: 1000 };
+const conv = (u, cur) => cur === 'RUB' ? Math.round(u * 1.5 / 5) * 5 : cur === 'USD' ? Math.max(1, Math.round(u / RATE)) : u;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const mine = (req) => db.orders.find(x => x.id === Number(req.params.id) && x.userId === req.user.id);
+
+async function mail(subject, html) {
+  if (!RESEND_API_KEY) return;
+  try {
+    await fetch('https://api.resend.com/emails', { method: 'POST',
+      headers: { authorization: 'Bearer ' + RESEND_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: MAIL_FROM, to: [MAIL_TO], subject, html }) });
+  } catch { /* письмо не критично */ }
+}
+const orderText = o => `${o.plan ? 'Подписка ' + PLANS[o.plan].name : 'Заказ'} ${o.code}: ${o.amount} ${o.cur}\nПокупатель: ${o.userName} (${o.userId})\nКонтакт: ${o.contact}\n${o.items.join(', ')}`;
+function notifyAdmin(title, o, withLink) {
+  const link = withLink ? `${BASE_URL}/confirm?t=${jwt.sign({ oid: o.id }, JWT_SECRET, { expiresIn: '7d' })}` : '';
+  notify(`${title}\n${orderText(o)}${link ? '\nПодтвердить оплату: ' + link : ''}`);
+  mail(`BEATSHOP: ${title} ${o.code}`, `<p>${esc(title)}</p><pre>${esc(orderText(o))}</pre>${link ? `<p><a href="${link}">Проверить и подтвердить оплату</a></p>` : ''}<p><a href="${BASE_URL}/admin">Админка</a></p>`);
+}
+// Оплата подтверждена (автоматически, по ссылке из письма или в админке)
+function settle(o, how) {
+  if (o.status === 'paid' || o.status === 'done') return;
+  o.status = o.plan ? 'done' : 'paid'; o.paidBy = how;
+  const u = db.users[o.userId];
+  if (o.plan && u) { u.plan = o.plan; u.planUntil = Math.max(Date.now(), u.planUntil || 0) + 30 * DAY; }
+  save();
+  notifyAdmin(`Оплата получена (${how})`, o, false);
+}
+
+// Заказ создаётся ДО оплаты: сервер сам считает сумму и выдаёт код для комментария
 app.post('/api/order', need, (req, res) => {
-  const { contact, items, sum, cur, plan } = req.body || {};
+  const { contact, ids, plan, cur } = req.body || {};
   if (!/^(@?[A-Za-z0-9_]{5,32}|[^\s@]+@[^\s@]+\.[^\s@]+)$/.test(String(contact || ''))) return res.status(400).json({ error: 'Укажи почту или Telegram' });
-  if (plan && !PLANS[plan]) return res.status(400).json({ error: 'Неизвестный тариф' });
-  const o = { id: Date.now(), userId: req.user.id, userName: req.user.name, contact: String(contact),
-    items: (Array.isArray(items) ? items : []).slice(0, 30).map(s => String(s).slice(0, 80)),
-    sum: String(sum || '').slice(0, 20), cur: String(cur || '').slice(0, 3), plan: plan || null, status: 'pending', at: Date.now() };
+  if (!['UAH', 'RUB', 'USD'].includes(cur)) return res.status(400).json({ error: 'Неизвестная валюта' });
+  if (db.orders.filter(x => x.userId === req.user.id && x.status === 'pending').length >= 10) return res.status(429).json({ error: 'Слишком много неоплаченных заказов' });
+  let items = [], amount = 0;
+  if (plan) {
+    if (!PLANS[plan]) return res.status(400).json({ error: 'Неизвестный тариф' });
+    items = ['Подписка ' + PLANS[plan].name + ' (30 дней)']; amount = conv(PLAN_UAH[plan], cur);
+  } else {
+    for (const id of (Array.isArray(ids) ? ids : []).slice(0, 30)) {
+      const c = CATALOG[id], b = db.beats.find(x => x.id === Number(id));
+      const t = c ? c.t : b?.title, u = c ? c.u : b?.uah;
+      if (!t) return res.status(400).json({ error: 'Бит не найден, обнови страницу' });
+      items.push(t); amount += conv(u, cur);
+    }
+    if (!items.length) return res.status(400).json({ error: 'Корзина пуста' });
+  }
+  let code; do code = 'BS-' + (1000 + crypto.randomInt(9000)); while (db.orders.some(x => x.code === code));
+  const o = { id: Date.now(), code, userId: req.user.id, userName: req.user.name, contact: String(contact), items, amount, cur,
+    plan: plan || null, status: 'pending', at: Date.now() };
   db.orders.push(o); save();
-  notify(`${o.plan ? 'Подписка ' + PLANS[o.plan].name : 'Заказ'}: ${o.sum}\nПокупатель: ${o.userName} (${o.userId})\nКонтакт: ${o.contact}\n${o.items.join(', ')}\nАдминка: ${BASE_URL}/admin`);
+  res.json({ id: o.id, code, amount, cur, autoMono: !!(MONO_TOKEN && MONO_SECRET) });
+});
+app.get('/api/order/:id', need, (req, res) => { const o = mine(req); o ? res.json({ status: o.status }) : res.sendStatus(404); });
+// Для DonationAlerts и PayPal: покупатель нажал «Я оплатил(а)», тебе уходит письмо со ссылкой подтверждения
+app.post('/api/order/:id/claim', need, (req, res) => {
+  const o = mine(req);
+  if (!o) return res.sendStatus(404);
+  if (o.status === 'pending') { o.status = 'claimed'; save(); notifyAdmin('Покупатель сообщил об оплате', o, true); }
   res.json({ ok: true });
 });
+
+// Страница из письма: GET только показывает кнопку, подтверждает POST (чтобы почтовые сканеры не нажимали сами)
+app.get('/confirm', (req, res) => {
+  try {
+    const { oid } = jwt.verify(String(req.query.t), JWT_SECRET);
+    const o = db.orders.find(x => x.id === oid); if (!o) throw 0;
+    res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Подтверждение оплаты</title><body style="font:16px system-ui;max-width:520px;margin:30px auto;padding:0 16px"><h2>Деньги пришли?</h2><pre style="white-space:pre-wrap">${esc(orderText(o))}</pre><p>Статус: ${esc(o.status)}</p><button id="b" style="padding:12px 20px;font-size:16px">Да, оплата получена</button><p id="m"></p><script>b.onclick=async()=>{const r=await fetch("/confirm",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({t:${JSON.stringify(String(req.query.t))}})});m.textContent=r.ok?"Готово, оплата подтверждена.":"Ошибка";b.disabled=true}</script>`);
+  } catch { res.status(400).send('Ссылка недействительна или устарела'); }
+});
+app.post('/confirm', (req, res) => {
+  try { const { oid } = jwt.verify(String(req.body.t), JWT_SECRET); const o = db.orders.find(x => x.id === oid); if (!o) throw 0; settle(o, 'почта'); res.json({ ok: true }); }
+  catch { res.sendStatus(400); }
+});
+
+// Monobank: банк сам присылает каждое поступление на карту. Ищем код заказа в комментарии и сверяем сумму
+app.get('/api/mono/:secret', (req, res) => res.sendStatus(MONO_SECRET && req.params.secret === MONO_SECRET ? 200 : 404));
+app.post('/api/mono/:secret', (req, res) => {
+  if (!MONO_SECRET || req.params.secret !== MONO_SECRET) return res.sendStatus(404);
+  res.sendStatus(200);
+  const it = req.body?.data?.statementItem;
+  if (!it || !(it.amount > 0)) return;
+  const m = `${it.comment || ''} ${it.description || ''}`.toUpperCase().match(/BS-\d{4}/);
+  const o = m && db.orders.find(x => x.code === m[0] && x.cur === 'UAH' && (x.status === 'pending' || x.status === 'claimed'));
+  if (!o) return;
+  if (it.amount / 100 + 0.01 < o.amount) return notifyAdmin(`Недоплата: пришло ${it.amount / 100} ₴ из ${o.amount} ₴`, o, true);
+  settle(o, 'Monobank');
+});
+function registerMono() {
+  if (!MONO_TOKEN || !MONO_SECRET || !BASE_URL) return;
+  fetch('https://api.monobank.ua/personal/webhook', { method: 'POST', headers: { 'X-Token': MONO_TOKEN, 'content-type': 'application/json' },
+    body: JSON.stringify({ webHookUrl: `${BASE_URL}/api/mono/${MONO_SECRET}` }) })
+    .then(r => console.log('Monobank webhook:', r.status)).catch(e => console.log('Monobank webhook error', e.message));
+}
 
 // ---------- админка ----------
 const adm = (req, res, next) => req.headers['x-admin-key'] === ADMIN_KEY ? next() : res.sendStatus(403);
@@ -148,13 +235,11 @@ app.get('/admin/api/orders', adm, (_q, r) => r.json([...db.orders].reverse().sli
 app.post('/admin/api/done', adm, (req, res) => {
   const o = db.orders.find(x => x.id === req.body.id);
   if (!o) return res.sendStatus(404);
-  if (o.plan && o.status === 'pending') {
-    const u = db.users[o.userId];
-    if (u) { u.plan = o.plan; u.planUntil = Math.max(Date.now(), u.planUntil || 0) + 30 * DAY; }
-  }
-  o.status = 'done'; save(); res.json({ ok: true });
+  if (o.status === 'pending' || o.status === 'claimed') settle(o, 'админка');
+  else if (o.status === 'paid') { o.status = 'done'; save(); }
+  res.json({ ok: true });
 });
 app.get('/admin', (_q, r) => r.sendFile(path.resolve('public/admin.html')));
 
 app.use(express.static('public'));
-app.listen(PORT, () => console.log('BEATSHOP on :' + PORT));
+app.listen(PORT, () => { console.log('BEATSHOP on :' + PORT); setTimeout(registerMono, 3000); });

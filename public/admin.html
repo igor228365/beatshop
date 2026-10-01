@@ -12,9 +12,9 @@ async function load() {
   if (!r.ok) { sessionStorage.removeItem("k"); return l.textContent = "Неверный ключ. Обнови страницу."; }
   const o = await r.json();
   l.innerHTML = o.map(x => `<div style="border:1px solid #ccc;border-radius:10px;padding:12px;margin:10px 0">
-    <b>${x.plan ? "Подписка " + esc(x.plan) : "Заказ"}</b> · ${esc(x.sum)} · ${x.status}<br>
+    <b>${x.plan ? "Подписка " + esc(x.plan) : "Заказ"} ${esc(x.code||"")}</b> · ${esc(x.amount)} ${esc(x.cur)} · ${x.status}<br>
     ${esc(x.userName)} (${esc(x.userId)})<br>Контакт: ${esc(x.contact)}<br>${x.items.map(esc).join(", ")}<br>
-    ${x.status === "pending" ? `<button onclick="done(${x.id})">${x.plan ? "Оплата пришла: включить на 30 дней" : "Отметить выполненным"}</button>` : ""}</div>`).join("") || "Заявок нет";
+    ${x.status !== "done" ? `<button onclick="done(${x.id})">${x.status === "paid" ? "Бит отправлен покупателю" : "Оплата пришла: подтвердить"}</button>` : ""}</div>`).join("") || "Заявок нет";
 }
 async function done(id) { await fetch("/admin/api/done", {method: "POST", headers: H, body: JSON.stringify({id})}); load(); }
 load();
