@@ -67,9 +67,39 @@ input,select{background:var(--panel);border:1px solid var(--line);border-radius:
 .toast.on{opacity:1}
 .plan{display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--line);border-radius:12px;padding:12px}
 @media (prefers-reduced-motion:reduce){.drawer,.toast{transition:none}}
+.gate{position:fixed;inset:0;background:rgba(10,5,20,.94);z-index:100;display:none;place-items:center;padding:20px;overflow:auto}
+.gate.open{display:grid}
+.agree{display:flex;gap:10px;align-items:flex-start;cursor:pointer;margin:6px 0 4px;color:var(--text)}
+.agree input{width:20px;height:20px;margin-top:3px;flex:none;accent-color:var(--acc)}
+.agree a,.foot a,.modal a.lnk{color:var(--acc2)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.foot{max-width:1100px;margin:0 auto;padding:24px 20px 48px;border-top:1px solid var(--line);color:var(--mute);font-size:14px;display:flex;flex-wrap:wrap;gap:8px 20px}
+.legal{font-size:13px;color:var(--mute);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:12px}
 </style>
 </head>
 <body>
+<div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gateT"><div class="modal">
+  <h2 id="gateT">Добро пожаловать в BEATSHOP</h2>
+  <p>Чтобы продолжить, прочитай и прими пользовательское соглашение.</p>
+  <label class="agree"><input type="checkbox" id="gateCheck"><span>Я прочитал(а) и согласен(на) с <a href="/terms.html" target="_blank" rel="noopener">пользовательским соглашением</a></span></label>
+  <button class="btn" id="gateBtn" style="width:100%;margin-top:14px" disabled>Войти на сайт</button>
+  <div class="note">Сайт не отвечает за ваши деньги при переводе через платёжные сервисы и не имеет претензий на купленные вами биты. Подробности в соглашении.</div>
+</div></div>
+<script>
+(function(){
+  var K="terms",V=1,g=document.getElementById("gate"),c=document.getElementById("gateCheck"),b=document.getElementById("gateBtn"),t=null;
+  try{t=JSON.parse(localStorage.getItem(K))}catch(e){}
+  if(t&&t.v===V){window.__terms=t;return}
+  g.classList.add("open");document.documentElement.style.overflow="hidden";
+  c.onchange=function(){b.disabled=!c.checked};
+  b.onclick=function(){
+    if(!c.checked)return;
+    t={v:V,at:new Date().toISOString()};window.__terms=t;
+    try{localStorage.setItem(K,JSON.stringify(t))}catch(e){}
+    g.classList.remove("open");document.documentElement.style.overflow="";
+  };
+})();
+</script>
 <header>
   <div class="logo">BEAT<b>SHOP</b></div>
   <div class="sp"></div>
@@ -87,6 +117,11 @@ input,select{background:var(--panel);border:1px solid var(--line);border-radius:
   <div class="bar" id="chips"></div>
   <div class="grid" id="grid"></div>
 </main>
+<footer class="foot">
+  <span>© BEATSHOP</span>
+  <a href="/terms.html" target="_blank" rel="noopener">Пользовательское соглашение</a>
+  <a href="mailto:beatshop228@gmail.com">beatshop228@gmail.com</a>
+</footer>
 
 <!-- Вход -->
 <div class="ov" id="authOv"><div class="modal">
@@ -112,6 +147,7 @@ input,select{background:var(--panel);border:1px solid var(--line);border-radius:
     <input id="sBpm" type="number" min="60" max="200" placeholder="BPM (необязательно)">
     <input id="sPrice" type="number" min="1" placeholder="Цена, ₴">
     <label class="meta">Файл бита (mp3). Сайт сам вырежет 10 секунд лучшего момента для превью<input id="sFile" type="file" accept="audio/*"></label>
+    <label class="agree meta"><input type="checkbox" id="sRights"><span>Я автор этого бита и имею право его продавать. Согласен(на) с <a class="lnk" href="/terms.html" target="_blank" rel="noopener">соглашением</a></span></label>
     <button class="btn" id="sSave">Опубликовать</button>
   </div>
   <button class="btn ghost sm" style="margin-top:14px" data-close="sellOv">Отмена</button>
@@ -137,7 +173,16 @@ input,select{background:var(--panel);border:1px solid var(--line);border-radius:
   <div class="note" id="payStatus"></div>
   <a class="btn" id="sent" href="#" style="display:none;text-align:center;text-decoration:none;margin-top:12px">Я оплатил(а)</a>
   <div class="note">Полные версии битов придут на твой контакт после подтверждения оплаты.</div>
+  <div class="legal">Сайт не отвечает за ваши деньги: за ошибки перевода, комиссии, блокировки и задержки платёжных сервисов. Сайт не имеет претензий на бит, который ты покупаешь. Права на бит принадлежат автору и передаются по условиям лицензии. Продолжая, ты подтверждаешь согласие с <a class="lnk" href="/terms.html" target="_blank" rel="noopener">пользовательским соглашением</a>.</div>
   <button class="btn ghost sm" style="margin-top:14px" data-close="orderOv">Закрыть</button>
+</div></div>
+
+<!-- После покупки -->
+<div class="ov" id="thanksOv"><div class="modal">
+  <h2>Оплата получена</h2>
+  <p>Полный бит придёт на контакт, который ты указал(а).</p>
+  <div class="legal" style="margin-top:0">Сайт не имеет никаких претензий на бит, который ты купил(а), и не отвечает за его дальнейшее использование. Права на бит принадлежат автору и передаются тебе на условиях лицензии. Ответственность за использование бита лежит на покупателе. Подробности в <a class="lnk" href="/terms.html" target="_blank" rel="noopener">пользовательском соглашении</a>.</div>
+  <button class="btn" style="margin-top:14px;width:100%" data-close="thanksOv">Понятно</button>
 </div></div>
 
 <!-- Корзина -->
@@ -258,7 +303,7 @@ async function openOrder(rows=cart.map(id=>beats.find(b=>b.id===id)).filter(Bool
   go.onclick=async()=>{
     go.disabled=true;
     try{
-      const o=await api("/api/order",{method:"POST",headers:JSONH,body:JSON.stringify({contact:ci.value.trim(),ids:plan?[]:rows.map(b=>b.id),plan,cur})});
+      const o=await api("/api/order",{method:"POST",headers:JSONH,body:JSON.stringify({contact:ci.value.trim(),ids:plan?[]:rows.map(b=>b.id),plan,cur,terms:window.__terms||null})});
       go.style.display="none";ci.disabled=true;
       const a=fm(o.amount);let pay;
       if(cur==="UAH")pay=`<div class="meta">Переведи ровно ${a} на карту Monobank. В комментарии к переводу укажи код заказа.</div><div class="cardnum">${CONFIG.MONO_CARD}</div><button class="btn ghost" data-copy="${CONFIG.MONO_CARD.replace(/\s/g,"")}">Скопировать номер карты</button>`;
@@ -276,7 +321,7 @@ async function openOrder(rows=cart.map(id=>beats.find(b=>b.id===id)).filter(Bool
         try{const r=await api("/api/order/"+o.id);if(r.status==="paid"||r.status==="done"){
           clearInterval(orderTimer);$("#orderOv").classList.remove("open");
           if(plan){try{user=(await api("/api/me")).user;renderAuth()}catch(e){}toast("Подписка активна. Можно добавлять биты")}
-          else{cart=[];store.set("cart",cart);renderCart();toast("Оплата получена. Бит придёт на твой контакт")}
+          else{cart=[];store.set("cart",cart);renderCart();toast("Оплата получена. Бит придёт на твой контакт");$("#thanksOv").classList.add("open")}
         }}catch(e){}
       },4000);
     }catch(err){toast(err.message);go.disabled=false}
@@ -333,7 +378,8 @@ function openPlans(){
 $("#sSave").onclick=async()=>{
   const title=$("#sTitle").value.trim(),uah=+$("#sPrice").value,f=$("#sFile").files[0];
   if(!title||!uah||!f)return toast("Заполни название, цену и выбери файл");
-  const fd=new FormData();fd.append("title",title);fd.append("genre",$("#sGenre").value);fd.append("bpm",$("#sBpm").value);fd.append("uah",uah);fd.append("audio",f);
+  if(!$("#sRights").checked)return toast("Подтверди, что ты автор бита");
+  const fd=new FormData();fd.append("title",title);fd.append("genre",$("#sGenre").value);fd.append("bpm",$("#sBpm").value);fd.append("uah",uah);fd.append("audio",f);fd.append("rights","1");
   const btn=$("#sSave");btn.disabled=true;btn.textContent="Загружаю…";
   try{const b=await api("/api/beats",{method:"POST",body:fd});beats.unshift(b);["#sTitle","#sBpm","#sPrice","#sFile"].forEach(s=>$(s).value="");$("#sellOv").classList.remove("open");renderGrid();toast("Бит опубликован")}
   catch(e){toast(e.message)}
