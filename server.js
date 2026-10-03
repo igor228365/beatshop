@@ -109,7 +109,6 @@ app.post('/api/beats', need, upload.single('audio'), async (req, res) => {
   const fail = (code, error) => { if (f) fs.rm(f.path, () => {}); res.status(code).json({ error }); };
   if (!active(u)) return fail(402, 'Нужна активная подписка Pro или Pro Max');
   if (db.beats.filter(b => b.userId === u.id).length >= PLANS[u.plan].limit) return fail(403, 'Лимит битов на твоём тарифе. Перейди на Pro Max');
-  if (req.body.rights !== '1') return fail(400, 'Подтверди, что ты автор бита и имеешь право его продавать');
   const title = String(req.body.title || '').trim().slice(0, 80), uah = Math.round(Number(req.body.uah));
   if (!f || !title || !(uah >= 50 && uah <= 100000)) return fail(400, 'Укажи название, цену (50–100000 ₴) и файл');
   if (!/\.(mp3|wav|m4a|ogg)$/i.test(f.originalname)) return fail(400, 'Нужен аудиофайл mp3, wav, m4a или ogg');
@@ -165,8 +164,7 @@ function settle(o, how) {
 
 // Заказ создаётся ДО оплаты: сервер сам считает сумму и выдаёт код для комментария
 app.post('/api/order', need, (req, res) => {
-  const { contact, ids, plan, cur, terms } = req.body || {};
-  if (!terms || Number(terms.v) !== 1) return res.status(400).json({ error: 'Прими пользовательское соглашение' });
+  const { contact, ids, plan, cur } = req.body || {};
   if (!/^(@?[A-Za-z0-9_]{5,32}|[^\s@]+@[^\s@]+\.[^\s@]+)$/.test(String(contact || ''))) return res.status(400).json({ error: 'Укажи почту или Telegram' });
   if (!['UAH', 'RUB', 'USD'].includes(cur)) return res.status(400).json({ error: 'Неизвестная валюта' });
   if (db.orders.filter(x => x.userId === req.user.id && x.status === 'pending').length >= 10) return res.status(429).json({ error: 'Слишком много неоплаченных заказов' });
@@ -185,8 +183,7 @@ app.post('/api/order', need, (req, res) => {
   }
   let code; do code = 'BS-' + (1000 + crypto.randomInt(9000)); while (db.orders.some(x => x.code === code));
   const o = { id: Date.now(), code, userId: req.user.id, userName: req.user.name, contact: String(contact), items, amount, cur,
-    plan: plan || null, status: 'pending', at: Date.now(),
-    terms: { v: 1, at: String(terms.at || '').slice(0, 40), ip: req.ip } };
+    plan: plan || null, status: 'pending', at: Date.now() };
   db.orders.push(o); save();
   res.json({ id: o.id, code, amount, cur, autoMono: !!(MONO_TOKEN && MONO_SECRET) });
 });
@@ -244,6 +241,5 @@ app.post('/admin/api/done', adm, (req, res) => {
 });
 app.get('/admin', (_q, r) => r.sendFile(path.resolve('public/admin.html')));
 
-app.get('/terms', (_q, r) => r.redirect('/terms.html'));
 app.use(express.static('public'));
 app.listen(PORT, () => { console.log('BEATSHOP on :' + PORT); setTimeout(registerMono, 3000); });
